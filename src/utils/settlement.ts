@@ -1,9 +1,45 @@
-import type { Participant, Expense, Settlement, Balance } from "@/types";
+import type { Participant, Expense, Settlement, Balance, ShareWeight } from "@/types";
 
 const EPSILON = 0.01;
 
 export function round2(num: number): number {
   return Math.round(num * 100) / 100;
+}
+
+function getWeightMap(shareWeights: ShareWeight[], participantId: string): number {
+  const found = shareWeights.find((w) => w.participantId === participantId);
+  return found ? found.weight : 1;
+}
+
+function calculateShares(expense: Expense): Map<string, number> {
+  const shares = new Map<string, number>();
+
+  if (expense.shareType === "weighted" && expense.shareWeights.length > 0) {
+    let totalWeight = 0;
+    expense.participantIds.forEach((pid) => {
+      const w = getWeightMap(expense.shareWeights, pid);
+      totalWeight += w;
+    });
+
+    if (totalWeight > 0) {
+      expense.participantIds.forEach((pid) => {
+        const w = getWeightMap(expense.shareWeights, pid);
+        shares.set(pid, round2((expense.amount * w) / totalWeight));
+      });
+    } else {
+      const shareAmount = expense.amount / expense.participantIds.length;
+      expense.participantIds.forEach((pid) => {
+        shares.set(pid, round2(shareAmount));
+      });
+    }
+  } else {
+    const shareAmount = expense.amount / expense.participantIds.length;
+    expense.participantIds.forEach((pid) => {
+      shares.set(pid, round2(shareAmount));
+    });
+  }
+
+  return shares;
 }
 
 export function calculateBalances(
@@ -22,8 +58,8 @@ export function calculateBalances(
       payerData.paid += expense.amount;
     }
 
-    const shareAmount = expense.amount / expense.participantIds.length;
-    expense.participantIds.forEach((pid) => {
+    const shares = calculateShares(expense);
+    shares.forEach((shareAmount, pid) => {
       const pData = balanceMap.get(pid);
       if (pData) {
         pData.share += shareAmount;
@@ -92,4 +128,13 @@ export function calculateSettlements(
 
 export function getTotalExpense(expenses: Expense[]): number {
   return round2(expenses.reduce((sum, e) => sum + e.amount, 0));
+}
+
+export function getExpenseShareText(expense: Expense, participantId: string): number {
+  const shares = calculateShares(expense);
+  return shares.get(participantId) || 0;
+}
+
+export function getShareTypeLabel(shareType: string): string {
+  return shareType === "weighted" ? "按比例" : "平均分摊";
 }

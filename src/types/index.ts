@@ -3,12 +3,21 @@ export interface Participant {
   name: string;
 }
 
+export type ShareType = "equal" | "weighted";
+
+export interface ShareWeight {
+  participantId: string;
+  weight: number;
+}
+
 export interface Expense {
   id: string;
   amount: number;
   payerId: string;
   participantIds: string[];
   note: string;
+  shareType: ShareType;
+  shareWeights: ShareWeight[];
   createdAt: string;
 }
 
@@ -26,10 +35,22 @@ export interface Balance {
   share: number;
 }
 
+export interface ExpensePreset {
+  id: string;
+  name: string;
+  defaultAmount: number | null;
+  payerName: string;
+  participantNames: string[];
+  shareType: ShareType;
+  shareWeights: { participantName: string; weight: number }[];
+  note: string;
+}
+
 export interface ActivityTemplate {
   id: string;
   name: string;
   participants: string[];
+  expensePresets: ExpensePreset[];
   createdAt: string;
 }
 
@@ -58,7 +79,9 @@ export interface AppState {
   removeExpense: (id: string) => void;
   addTemplate: (name: string, participantNames: string[]) => void;
   removeTemplate: (id: string) => void;
-  applyTemplate: (id: string) => void;
+  addExpensePreset: (templateId: string, preset: Omit<ExpensePreset, "id">) => void;
+  removeExpensePreset: (templateId: string, presetId: string) => void;
+  applyTemplate: (id: string) => { addedParticipants: number; addedExpenses: number };
   addRecurringExpense: (expense: Omit<RecurringExpense, "id" | "createdAt" | "lastAppliedAt">) => void;
   removeRecurringExpense: (id: string) => void;
   applyRecurringExpenses: () => void;

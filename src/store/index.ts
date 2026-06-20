@@ -1,5 +1,14 @@
 import { create } from "zustand";
-import type { Participant, Expense, AppState, ActivityTemplate, RecurringExpense, RecurrenceType } from "@/types";
+import type {
+  Participant,
+  Expense,
+  AppState,
+  ActivityTemplate,
+  RecurringExpense,
+  RecurrenceType,
+  ExpensePreset,
+  ShareType,
+} from "@/types";
 import { saveToStorage, loadFromStorage, clearStorage } from "@/utils/storage";
 
 function generateId(): string {
@@ -33,6 +42,50 @@ function isSamePeriod(date1: Date, date2: Date, recurrence: RecurrenceType): boo
   );
 }
 
+function ensureExpenseDefaults(expense: Partial<Expense> & { amount: number; payerId: string; participantIds: string[] }): Omit<Expense, "id" | "createdAt"> {
+  return {
+    amount: expense.amount,
+    payerId: expense.payerId,
+    participantIds: expense.participantIds,
+    note: expense.note || "",
+    shareType: (expense.shareType as ShareType) || "equal",
+    shareWeights: expense.shareWeights || [],
+  };
+}
+
+function sanitizeExpensesAfterRemoveParticipant(expenses: Expense[], removedId: string): Expense[] {
+  return expenses
+    .map((e) => ({
+      ...e,
+      participantIds: e.participantIds.filter((pid) => pid !== removedId),
+      shareWeights: e.shareWeights.filter((w) => w.participantId !== removedId),
+    }))
+    .filter((e) => e.payerId !== removedId && e.participantIds.length > 0);
+}
+
+function normalizeTemplate(t: any): ActivityTemplate {
+  return {
+    id: t.id,
+    name: t.name,
+    participants: t.participants || [],
+    expensePresets: Array.isArray(t.expensePresets) ? t.expensePresets : [],
+    createdAt: t.createdAt,
+  };
+}
+
+function normalizeExpense(e: any): Expense {
+  return {
+    id: e.id,
+    amount: e.amount,
+    payerId: e.payerId,
+    participantIds: e.participantIds,
+    note: e.note || "",
+    shareType: (e.shareType as ShareType) || "equal",
+    shareWeights: Array.isArray(e.shareWeights) ? e.shareWeights : [],
+    createdAt: e.createdAt,
+  };
+}
+
 export const useAppStore = create<AppState>((set, get) => ({
   participants: [],
   expenses: [],
@@ -63,12 +116,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   removeParticipant: (id: string) => {
     set((state) => {
       const participants = state.participants.filter((p) => p.id !== id);
-      const expenses = state.expenses
-        .map((e) => ({
-          ...e,
-          participantIds: e.participantIds.filter((pid) => pid !== id),
-        }))
-        .filter((e) => e.payerId !== id && e.participantIds.length > 0);
+      const expenses = sanitizeExpensesAfterRemoveParticipant(state.expenses, id);
 
       saveToStorage(participants, expenses, state.templates, state.recurringExpenses);
       return { participants, expenses };
@@ -80,8 +128,9 @@ export const useAppStore = create<AppState>((set, get) => ({
       return;
     }
 
+    const normalized = ensureExpenseDefaults(expense);
     const newExpense: Expense = {
-      ...expense,
+      ...normalized,
       id: generateId(),
       createdAt: new Date().toISOString(),
     };
@@ -109,6 +158,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id: generateId(),
       name: trimmed,
       participants: [...participantNames],
+      expensePresets: [],
       createdAt: new Date().toISOString(),
     };
 
@@ -127,12 +177,55 @@ export const useAppStore = create<AppState>((set, get) => ({
     });
   },
 
+  addExpensePreset: (templateId: string, preset: Omit<ExpensePreset, "id">) => {
+    if (!preset.name.trim() || !preset.payerName || preset.participantNames.length === 0) return;
+
+    const newPreset: ExpensePreset = {
+      ...preset,
+      id: generateId(),
+    };
+
+    set((state) => {
+      const templates = state.templates.map((t) => {
+        if (t.id === templateId) {
+          return {
+            ...t,
+            expensePresets: [newPreset, ...t.expensePresets],
+          };
+        }
+        return t;
+      });
+      saveToStorage(state.participants, state.expenses, templates, state.recurringExpenses);
+      return { templates };
+    });
+  },
+
+  removeExpensePreset: (templateId: string, presetId: string) => {
+    set((state) => {
+      const templates = state.templates.map((t) => {
+        if (t.id === templateId) {
+          return {
+            ...t,
+            expensePresets: t.expensePresets.filter((p) => p.id !== presetId),
+          };
+        }
+        return t;
+      });
+      saveToStorage(state.participants, state.expenses, templates, state.recurringExpenses);
+      return { templates };
+    });
+  },
+
   applyTemplate: (id: string) => {
     const template = get().templates.find((t) => t.id === id);
-    if (!template) return;
+    if (!template) return { addedParticipants: 0, addedExpenses: 0 };
+
+    let addedParticipants = 0;
+    let addedExpenses = 0;
 
     set((state) => {
       let updatedParticipants = [...state.participants];
+      let updatedExpenses = [...state.expenses];
 
       template.participants.forEach((name) => {
         const exists = updatedParticipants.some(
@@ -143,12 +236,57 @@ export const useAppStore = create<AppState>((set, get) => ({
             id: generateId(),
             name,
           });
+          addedParticipants++;
         }
       });
 
-      saveToStorage(updatedParticipants, state.expenses, state.templates, state.recurringExpenses);
-      return { participants: updatedParticipants };
+      const findParticipantId = (name: string): string | undefined => {
+        return updatedParticipants.find(
+          (p) => p.name.toLowerCase() === name.toLowerCase()
+        )?.id;
+      };
+
+      template.expensePresets.forEach((preset) => {
+        if (preset.defaultAmount == null || preset.defaultAmount <= 0) return;
+
+        const payerId = findParticipantId(preset.payerName);
+        if (!payerId) return;
+
+        const participantIds: string[] = [];
+        preset.participantNames.forEach((name) => {
+          const pid = findParticipantId(name);
+          if (pid) participantIds.push(pid);
+        });
+        if (participantIds.length === 0) return;
+
+        const shareWeights = preset.shareWeights
+          .map((w) => {
+            const pid = findParticipantId(w.participantName);
+            if (!pid) return null;
+            return { participantId: pid, weight: w.weight };
+          })
+          .filter(Boolean) as { participantId: string; weight: number }[];
+
+        const newExpense: Expense = {
+          id: generateId(),
+          amount: preset.defaultAmount,
+          payerId,
+          participantIds,
+          note: preset.note || preset.name,
+          shareType: preset.shareType,
+          shareWeights,
+          createdAt: new Date().toISOString(),
+        };
+
+        updatedExpenses = [newExpense, ...updatedExpenses];
+        addedExpenses++;
+      });
+
+      saveToStorage(updatedParticipants, updatedExpenses, state.templates, state.recurringExpenses);
+      return { participants: updatedParticipants, expenses: updatedExpenses };
     });
+
+    return { addedParticipants, addedExpenses };
   },
 
   addRecurringExpense: (expense) => {
@@ -228,6 +366,8 @@ export const useAppStore = create<AppState>((set, get) => ({
         payerId,
         participantIds,
         note: expenseNote,
+        shareType: "equal",
+        shareWeights: [],
         createdAt: new Date().toISOString(),
       };
 
@@ -258,11 +398,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   loadState: () => {
     const data = loadFromStorage();
     if (data) {
+      const expenses = Array.isArray(data.expenses)
+        ? data.expenses.map(normalizeExpense)
+        : [];
+      const templates = Array.isArray(data.templates)
+        ? data.templates.map(normalizeTemplate)
+        : [];
+
       set({
         participants: data.participants,
-        expenses: data.expenses,
-        templates: data.templates,
-        recurringExpenses: data.recurringExpenses,
+        expenses,
+        templates,
+        recurringExpenses: Array.isArray(data.recurringExpenses) ? data.recurringExpenses : [],
       });
     }
   },

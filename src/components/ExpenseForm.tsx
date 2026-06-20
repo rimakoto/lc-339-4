@@ -1,7 +1,8 @@
-import { useState } from "react";
-import { Receipt, Plus, Check, ChevronDown } from "lucide-react";
+import { useState, KeyboardEvent } from "react";
+import { Receipt, Plus, Check, ChevronDown, Scale, Users } from "lucide-react";
 import { useAppStore } from "@/store";
 import { round2 } from "@/utils/settlement";
+import type { ShareType, ShareWeight } from "@/types";
 
 export default function ExpenseForm() {
   const participants = useAppStore((s) => s.participants);
@@ -11,7 +12,10 @@ export default function ExpenseForm() {
   const [note, setNote] = useState("");
   const [payerId, setPayerId] = useState("");
   const [selectedParticipants, setSelectedParticipants] = useState<string[]>([]);
+  const [shareType, setShareType] = useState<ShareType>("equal");
+  const [shareWeights, setShareWeights] = useState<Record<string, string>>({});
   const [showPayerDropdown, setShowPayerDropdown] = useState(false);
+  const [showShareTypeDropdown, setShowShareTypeDropdown] = useState(false);
 
   const handleAmountChange = (val: string) => {
     const cleaned = val.replace(/[^\d.]/g, "");
@@ -37,22 +41,67 @@ export default function ExpenseForm() {
     setSelectedParticipants([]);
   };
 
+  const handleWeightChange = (participantId: string, value: string) => {
+    const cleaned = value.replace(/[^\d.]/g, "");
+    setShareWeights((prev) => ({ ...prev, [participantId]: cleaned }));
+  };
+
+  const getWeight = (participantId: string): number => {
+    const val = parseFloat(shareWeights[participantId] || "1");
+    return isNaN(val) || val <= 0 ? 1 : val;
+  };
+
+  const getTotalWeight = (): number => {
+    return selectedParticipants.reduce((sum, pid) => sum + getWeight(pid), 0);
+  };
+
+  const getShareAmount = (participantId: string): number => {
+    const numAmount = parseFloat(amount || "0");
+    if (numAmount <= 0 || selectedParticipants.length === 0) return 0;
+
+    if (shareType === "weighted") {
+      const totalWeight = getTotalWeight();
+      if (totalWeight <= 0) return 0;
+      return round2((numAmount * getWeight(participantId)) / totalWeight);
+    }
+
+    return round2(numAmount / selectedParticipants.length);
+  };
+
+  const getSharePercentage = (participantId: string): number => {
+    if (shareType !== "weighted") return 0;
+    const totalWeight = getTotalWeight();
+    if (totalWeight <= 0) return 0;
+    return round2((getWeight(participantId) / totalWeight) * 100);
+  };
+
   const handleSubmit = () => {
     const numAmount = round2(parseFloat(amount || "0"));
     if (numAmount <= 0) return;
     if (!payerId) return;
     if (selectedParticipants.length === 0) return;
 
+    const weights: ShareWeight[] =
+      shareType === "weighted"
+        ? selectedParticipants.map((pid) => ({
+            participantId: pid,
+            weight: getWeight(pid),
+          }))
+        : [];
+
     addExpense({
       amount: numAmount,
       payerId,
       participantIds: selectedParticipants,
       note: note.trim(),
+      shareType,
+      shareWeights: weights,
     });
 
     setAmount("");
     setNote("");
     setSelectedParticipants([]);
+    setShareWeights({});
   };
 
   const canSubmit =
@@ -61,6 +110,19 @@ export default function ExpenseForm() {
     selectedParticipants.length > 0;
 
   const selectedPayer = participants.find((p) => p.id === payerId);
+
+  const shareTypeOptions = [
+    { value: "equal" as ShareType, label: "平均分摊", icon: Users },
+    { value: "weighted" as ShareType, label: "按比例分摊", icon: Scale },
+  ];
+  const selectedShareType = shareTypeOptions.find((o) => o.value === shareType)!;
+
+  const handleKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      handleSubmit();
+    }
+  };
 
   return (
     <div className="card animate-slide-up" style={{ animationDelay: "50ms" }}>
@@ -95,6 +157,7 @@ export default function ExpenseForm() {
                 inputMode="decimal"
                 value={amount}
                 onChange={(e) => handleAmountChange(e.target.value)}
+                onKeyDown={handleKeyDown}
                 placeholder="0.00"
                 className="input-field pl-8 text-xl font-semibold"
               />
@@ -109,6 +172,7 @@ export default function ExpenseForm() {
               type="text"
               value={note}
               onChange={(e) => setNote(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="例如：午餐、打车、门票..."
               className="input-field"
               maxLength={50}
@@ -154,6 +218,49 @@ export default function ExpenseForm() {
             )}
           </div>
 
+          <div className="relative">
+            <label className="block text-sm font-medium text-gray-700 mb-1.5">
+              分摊方式
+            </label>
+            <button
+              type="button"
+              onClick={() => setShowShareTypeDropdown(!showShareTypeDropdown)}
+              className="select-field flex items-center justify-between w-full"
+            >
+              <span className="flex items-center gap-2 text-gray-700">
+                <selectedShareType.icon className="w-4 h-4 text-emerald-600" />
+                {selectedShareType.label}
+              </span>
+              <ChevronDown
+                className={`w-4 h-4 text-gray-400 transition-transform ${showShareTypeDropdown ? "rotate-180" : ""}`}
+              />
+            </button>
+
+            {showShareTypeDropdown && (
+              <div className="absolute z-10 mt-2 w-full bg-white border border-emerald-200 rounded-2xl shadow-lg overflow-hidden animate-fade-in">
+                {shareTypeOptions.map((o) => (
+                  <button
+                    key={o.value}
+                    type="button"
+                    onClick={() => {
+                      setShareType(o.value);
+                      setShowShareTypeDropdown(false);
+                    }}
+                    className={`w-full px-4 py-3 text-left hover:bg-emerald-50 transition-colors flex items-center justify-between ${
+                      shareType === o.value ? "bg-emerald-50 text-emerald-800" : "text-gray-700"
+                    }`}
+                  >
+                    <span className="flex items-center gap-2">
+                      <o.icon className="w-4 h-4" />
+                      {o.label}
+                    </span>
+                    {shareType === o.value && <Check className="w-4 h-4 text-emerald-600" />}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+
           <div>
             <div className="flex items-center justify-between mb-1.5">
               <label className="block text-sm font-medium text-gray-700">
@@ -176,35 +283,72 @@ export default function ExpenseForm() {
                 </button>
               </div>
             </div>
-            <div className="flex flex-wrap gap-2 p-3 rounded-2xl border border-amber-100 bg-amber-50/30 min-h-[60px]">
-              {participants.map((p) => {
-                const isSelected = selectedParticipants.includes(p.id);
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    onClick={() => toggleParticipant(p.id)}
-                    className={`tag cursor-pointer transition-all ${
-                      isSelected
-                        ? "tag-emerald shadow-sm"
-                        : "opacity-60 hover:opacity-100"
-                    }`}
-                  >
-                    {isSelected && <Check className="w-3.5 h-3.5" />}
-                    {p.name}
-                  </button>
-                );
-              })}
+
+            <div className="space-y-2 p-3 rounded-2xl border border-amber-100 bg-amber-50/30 min-h-[60px]">
               {participants.length === 0 && (
                 <span className="text-sm text-gray-400">请先添加参与者</span>
               )}
+              {participants.map((p) => {
+                const isSelected = selectedParticipants.includes(p.id);
+                return (
+                  <div
+                    key={p.id}
+                    className={`flex items-center gap-3 p-2 rounded-xl transition-all ${
+                      isSelected ? "bg-white/70" : ""
+                    }`}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => toggleParticipant(p.id)}
+                      className={`tag cursor-pointer transition-all flex-shrink-0 ${
+                        isSelected
+                          ? "tag-emerald shadow-sm"
+                          : "opacity-60 hover:opacity-100"
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3.5 h-3.5" />}
+                      {p.name}
+                    </button>
+
+                    {isSelected && shareType === "weighted" && (
+                      <>
+                        <div className="flex items-center gap-1.5 flex-1">
+                          <span className="text-xs text-gray-500 w-10">权重:</span>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={shareWeights[p.id] || "1"}
+                            onChange={(e) => handleWeightChange(p.id, e.target.value)}
+                            className="w-16 px-2 py-1 text-sm text-center rounded-lg border border-emerald-200 bg-white focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                          />
+                          <span className="text-xs text-gray-500 w-12 text-right">
+                              {getSharePercentage(p.id).toFixed(0)}%
+                            </span>
+                          <span className="text-xs font-medium text-amber-600 w-20 text-right">
+                            ¥{getShareAmount(p.id).toFixed(2)}
+                          </span>
+                        </div>
+                      </>
+                    )}
+
+                    {isSelected && shareType === "equal" && amount && (
+                      <span className="text-xs text-amber-600 font-medium ml-auto">
+                        ¥{getShareAmount(p.id).toFixed(2)}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-            {amount && selectedParticipants.length > 0 && (
-              <p className="mt-2 text-sm text-gray-500">
-                每人分摊:{" "}
-                <span className="font-semibold text-amber-700">
-                  ¥{(parseFloat(amount) / selectedParticipants.length).toFixed(2)}
-                </span>
+
+            {shareType === "weighted" && selectedParticipants.length > 0 && (
+              <p className="mt-2 text-xs text-gray-500">
+                总权重: <span className="font-semibold text-emerald-700">{getTotalWeight().toFixed(0)}</span>
+                {amount && (
+                  <span className="ml-2">
+                  · 每人分摊金额根据权重比例计算
+                  </span>
+                )}
               </p>
             )}
           </div>

@@ -1,6 +1,6 @@
-import { ListTodo, Trash2, User, Users } from "lucide-react";
+import { ListTodo, Trash2, User, Users, Scale } from "lucide-react";
 import { useAppStore } from "@/store";
-import { getTotalExpense } from "@/utils/settlement";
+import { getTotalExpense, getShareTypeLabel } from "@/utils/settlement";
 
 export default function ExpenseList() {
   const participants = useAppStore((s) => s.participants);
@@ -69,8 +69,12 @@ export default function ExpenseList() {
                       付款: <span className="font-medium text-gray-800">{getPayerName(e.payerId)}</span>
                     </span>
                     <span className="inline-flex items-center gap-1">
-                      <Users className="w-3.5 h-3.5 text-blue-600" />
-                      分摊:{" "}
+                      {e.shareType === "weighted" ? (
+                        <Scale className="w-3.5 h-3.5 text-purple-600" />
+                      ) : (
+                        <Users className="w-3.5 h-3.5 text-blue-600" />
+                      )}
+                      {getShareTypeLabel(e.shareType)}:{" "}
                       <span className="font-medium text-gray-800">
                         {getParticipantNames(e.participantIds).join("、")}
                       </span>
